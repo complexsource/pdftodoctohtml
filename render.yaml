@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: pdftohtml
+    env: python
+    buildCommand: ""
+    startCommand: gunicorn pdftodoctohtml:app
+    plan: free
