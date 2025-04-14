@@ -4,3 +4,4 @@ mammoth
 gunicorn
 python-docx
 PyMuPDF
+requests
