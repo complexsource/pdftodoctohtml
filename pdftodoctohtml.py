@@ -1,70 +1,58 @@
 from flask import Flask, request, jsonify
-from pdf2docx import Converter
-import mammoth
-import tempfile
-import fitz  # PyMuPDF to count pages
+import io
 import requests
+import mammoth
+from pdfservices_sdk.credentials import Credentials
+from pdfservices_sdk.execution_context import ExecutionContext
+from pdfservices_sdk.io.file_ref import FileRef
+from pdfservices_sdk.pdfops.export_pdf_operation import ExportPDFOperation
+from pdfservices_sdk.pdfops.options.export_pdf.export_pdf_options import ExportPDFOptions, ExportPDFTargetFormat
 
 app = Flask(__name__)
 
-@app.route('/convert', methods=['POST'])
-def convert_pdf_to_html():
-    pdf_source = None
+# Convert PDF URL to HTML directly
+@app.route("/convert", methods=["POST"])
+def convert_pdf_url_to_html():
+    data = request.get_json()
+    pdf_url = data.get("url")
+
+    if not pdf_url:
+        return jsonify({"error": "Missing 'url' in request body"}), 400
 
     try:
-        # CASE 1: Uploaded via form-data
-        if 'pdf' in request.files:
-            pdf_file = request.files['pdf']
-            if pdf_file.filename == '':
-                return jsonify({'error': 'No selected file'}), 400
-            pdf_bytes = pdf_file.read()
-            pdf_source = 'upload'
+        # Step 1: Stream PDF from URL
+        pdf_response = requests.get(pdf_url, stream=True)
+        if pdf_response.status_code != 200:
+            return jsonify({"error": f"Failed to fetch PDF from URL: {pdf_url}"}), 400
 
-        # CASE 2: Provided via URL
-        elif request.is_json and 'url' in request.json:
-            url = request.json.get('url')
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            pdf_bytes = response.content
-            pdf_source = 'url'
-        else:
-            return jsonify({'error': 'Provide either a PDF file or a URL'}), 400
+        pdf_stream = io.BytesIO(pdf_response.content)
 
-        # Save PDF to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_pdf:
-            tmp_pdf.write(pdf_bytes)
-            tmp_pdf.flush()
+        # Step 2: Convert PDF stream to DOCX using Adobe API
+        credentials = Credentials.service_account_credentials_builder() \
+            .from_file("pdfservices-api-credentials.json") \
+            .build()
+        execution_context = ExecutionContext.create(credentials)
 
-            # Count number of pages (max 10)
-            doc = fitz.open(tmp_pdf.name)
-            total_pages = min(doc.page_count, 10)
-            doc.close()
+        export_pdf = ExportPDFOperation.create_new(
+            ExportPDFOptions.builder().with_export_format(ExportPDFTargetFormat.DOCX).build()
+        )
 
-            # Convert up to 10 pages in one go (avoids merge errors)
-            with tempfile.NamedTemporaryFile(suffix=".docx") as tmp_docx:
-                converter = Converter(tmp_pdf.name)
-                converter.convert(tmp_docx.name, start=0, end=total_pages - 1)
-                converter.close()
+        input_pdf = FileRef.create_from_stream(pdf_stream, ExportPDFTargetFormat.PDF)
+        export_pdf.set_input(input_pdf)
 
-                # Convert the DOCX to HTML using Mammoth
-                with open(tmp_docx.name, "rb") as docx_file:
-                    result = mammoth.convert_to_html(docx_file)
-                    html_content = result.value
+        result = export_pdf.execute(execution_context)
 
-        return jsonify({
-            "success": True,
-            "source": pdf_source,
-            "pages_converted": total_pages,
-            "html": html_content
-        })
+        # Step 3: Convert result DOCX to HTML
+        docx_stream = io.BytesIO()
+        result.save_as_stream(docx_stream)
+        docx_stream.seek(0)
 
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Failed to fetch PDF from URL: {str(e)}'}), 400
+        html_result = mammoth.convert_to_html(docx_stream).value
+
+        return html_result
+
     except Exception as e:
-        return jsonify({'error': f'Conversion failed: {str(e)}'}), 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
