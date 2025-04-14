@@ -3,45 +3,56 @@ from pdf2docx import Converter
 import mammoth
 import os
 import tempfile
+from docx import Document
 
 app = Flask(__name__)
 
 @app.route('/convert', methods=['POST'])
-def convert_pdf_to_html_response():
+def convert_all_pages():
     if 'pdf' not in request.files:
-        return jsonify({'error': 'No file part with name "pdf"'}), 400
+        return jsonify({'error': 'No file uploaded with key "pdf"'}), 400
 
     pdf_file = request.files['pdf']
-    if pdf_file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
 
-    # Step 1: Save uploaded PDF to temp file
-    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_pdf:
-        pdf_file.save(tmp_pdf.name)
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_pdf:
+            pdf_file.save(tmp_pdf.name)
 
-        # Step 2: Convert to DOCX into a temp file
-        with tempfile.NamedTemporaryFile(suffix=".docx") as tmp_docx:
-            try:
-                converter = Converter(tmp_pdf.name)
-                # converter.convert(tmp_docx.name, start=0, end=None)
-                converter.convert(tmp_docx.name, pages=[0])
-                converter.close()
-            except Exception as e:
-                return jsonify({'error': f'PDF to DOCX conversion failed: {str(e)}'}), 500
+            # Count pages first
+            from fitz import open as fitz_open
+            doc = fitz_open(tmp_pdf.name)
+            num_pages = doc.page_count
+            doc.close()
 
-            # Step 3: Convert DOCX to HTML (in memory)
-            try:
-                with open(tmp_docx.name, "rb") as docx_file:
+            # Prepare merged DOCX
+            merged_docx = Document()
+            for i in range(num_pages):
+                with tempfile.NamedTemporaryFile(suffix=".docx") as single_docx:
+                    converter = Converter(tmp_pdf.name)
+                    converter.convert(single_docx.name, pages=[i])
+                    converter.close()
+
+                    sub_doc = Document(single_docx.name)
+                    for element in sub_doc.element.body:
+                        merged_docx.element.body.append(element)
+
+            # Save merged DOCX to memory temp
+            with tempfile.NamedTemporaryFile(suffix=".docx") as final_docx:
+                merged_docx.save(final_docx.name)
+
+                # Convert to HTML
+                with open(final_docx.name, "rb") as docx_file:
                     result = mammoth.convert_to_html(docx_file)
                     html_content = result.value
-            except Exception as e:
-                return jsonify({'error': f'DOCX to HTML conversion failed: {str(e)}'}), 500
 
-    # Step 4: Return HTML content in JSON response
-    return jsonify({
-        "success": True,
-        "html": html_content
-    })
+        return jsonify({
+            "success": True,
+            "pages": num_pages,
+            "html": html_content
+        })
+
+    except Exception as e:
+        return jsonify({"error": f"Conversion failed: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
