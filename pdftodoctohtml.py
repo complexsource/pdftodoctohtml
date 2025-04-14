@@ -25,7 +25,10 @@ def convert_pdf_to_html():
         # CASE 2: Provided via URL
         elif request.is_json and 'url' in request.json:
             url = request.json.get('url')
-            response = requests.get(url)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            response = requests.get(url, headers=headers)
             response.raise_for_status()
             temp_pdf.write(response.content)
             temp_pdf.flush()
