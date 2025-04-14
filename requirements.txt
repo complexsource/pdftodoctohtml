@@ -2,3 +2,5 @@ Flask
 pdf2docx
 mammoth
 gunicorn
+python-docx
+PyMuPDF
