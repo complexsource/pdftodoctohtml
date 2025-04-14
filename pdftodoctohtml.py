@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 from pdf2docx import Converter
 import mammoth
@@ -53,18 +53,33 @@ def convert_pdf():
 
     return jsonify({
         'success': True,
+        'message': 'Files converted successfully',
         'docx_file': f'/doc/{filename_base}.docx',
-        'html_file': f'/html/{filename_base}.html'
+        'html_file': f'/html/{filename_base}.html',
+        'download_info': f'/download/{filename_base}'
     })
 
-# Serve files from folders (for testing/download)
-@app.route('/doc/<filename>')
-def get_docx(filename):
-    return app.send_static_file(os.path.join(DOC_FOLDER, filename))
+@app.route('/download/<filename>', methods=['GET'])
+def download_links(filename):
+    base_name = os.path.splitext(filename)[0]
+    docx_path = os.path.join(DOC_FOLDER, f"{base_name}.docx")
+    html_path = os.path.join(HTML_FOLDER, f"{base_name}.html")
 
-@app.route('/html/<filename>')
+    if not os.path.exists(docx_path) or not os.path.exists(html_path):
+        return jsonify({"error": "One or both files not found"}), 404
+
+    return jsonify({
+        "download_docx": f"/get-docx/{base_name}.docx",
+        "download_html": f"/get-html/{base_name}.html"
+    })
+
+@app.route('/get-docx/<filename>', methods=['GET'])
+def get_docx(filename):
+    return send_from_directory(DOC_FOLDER, filename, as_attachment=True)
+
+@app.route('/get-html/<filename>', methods=['GET'])
 def get_html(filename):
-    return app.send_static_file(os.path.join(HTML_FOLDER, filename))
+    return send_from_directory(HTML_FOLDER, filename, as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
