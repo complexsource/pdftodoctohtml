@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from pdf2docx import Converter
 import mammoth
 import tempfile
-from docx import Document
 import fitz  # PyMuPDF to count pages
 import requests
 
@@ -11,7 +10,6 @@ app = Flask(__name__)
 @app.route('/convert', methods=['POST'])
 def convert_pdf_to_html():
     pdf_source = None
-    temp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
 
     try:
         # CASE 1: Uploaded via form-data
@@ -19,7 +17,7 @@ def convert_pdf_to_html():
             pdf_file = request.files['pdf']
             if pdf_file.filename == '':
                 return jsonify({'error': 'No selected file'}), 400
-            pdf_file.save(temp_pdf.name)
+            pdf_bytes = pdf_file.read()
             pdf_source = 'upload'
 
         # CASE 2: Provided via URL
@@ -30,36 +28,31 @@ def convert_pdf_to_html():
             }
             response = requests.get(url, headers=headers)
             response.raise_for_status()
-            temp_pdf.write(response.content)
-            temp_pdf.flush()
+            pdf_bytes = response.content
             pdf_source = 'url'
         else:
-            return jsonify({'error': 'Provide either a file or a url'}), 400
+            return jsonify({'error': 'Provide either a PDF file or a URL'}), 400
 
-        # Step 2: Count pages (max 10)
-        doc = fitz.open(temp_pdf.name)
-        total_pages = min(doc.page_count, 10)
-        doc.close()
+        # Save PDF to temporary file
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_pdf:
+            tmp_pdf.write(pdf_bytes)
+            tmp_pdf.flush()
 
-        # Step 3: Convert each page individually and merge
-        merged_docx = Document()
+            # Count number of pages (max 10)
+            doc = fitz.open(tmp_pdf.name)
+            total_pages = min(doc.page_count, 10)
+            doc.close()
 
-        for i in range(total_pages):
-            with tempfile.NamedTemporaryFile(suffix=".docx") as single_docx:
-                converter = Converter(temp_pdf.name)
-                converter.convert(single_docx.name, pages=[i])
+            # Convert up to 10 pages in one go (avoids merge errors)
+            with tempfile.NamedTemporaryFile(suffix=".docx") as tmp_docx:
+                converter = Converter(tmp_pdf.name)
+                converter.convert(tmp_docx.name, start=0, end=total_pages - 1)
                 converter.close()
 
-                sub_doc = Document(single_docx.name)
-                for element in sub_doc.element.body:
-                    merged_docx.element.body.append(element)
-
-        # Step 4: Convert final merged DOCX to HTML
-        with tempfile.NamedTemporaryFile(suffix=".docx") as final_docx:
-            merged_docx.save(final_docx.name)
-            with open(final_docx.name, "rb") as docx_file:
-                result = mammoth.convert_to_html(docx_file)
-                html_content = result.value
+                # Convert the DOCX to HTML using Mammoth
+                with open(tmp_docx.name, "rb") as docx_file:
+                    result = mammoth.convert_to_html(docx_file)
+                    html_content = result.value
 
         return jsonify({
             "success": True,
@@ -72,8 +65,6 @@ def convert_pdf_to_html():
         return jsonify({'error': f'Failed to fetch PDF from URL: {str(e)}'}), 400
     except Exception as e:
         return jsonify({'error': f'Conversion failed: {str(e)}'}), 500
-    finally:
-        temp_pdf.close()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
