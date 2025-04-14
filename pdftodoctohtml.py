@@ -23,7 +23,8 @@ def convert_pdf_to_html_response():
         with tempfile.NamedTemporaryFile(suffix=".docx") as tmp_docx:
             try:
                 converter = Converter(tmp_pdf.name)
-                converter.convert(tmp_docx.name, start=0, end=None)
+                # converter.convert(tmp_docx.name, start=0, end=None)
+                converter.convert(tmp_docx.name, pages=[0])
                 converter.close()
             except Exception as e:
                 return jsonify({'error': f'PDF to DOCX conversion failed: {str(e)}'}), 500
